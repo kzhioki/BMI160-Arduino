@@ -5,7 +5,7 @@
 
 /*
    This sketch example demonstrates how the BMI160 on the
-   Intel(R) Curie(TM) module can be used to read gyroscope data
+   Intel(R) Curie(TM) module can be used to read accelerometer data
 */
 
 #include <BMI160Gen.h>
@@ -18,31 +18,25 @@ void setup() {
   Serial.println("Initializing IMU device...");
   //BMI160.begin(BMI160GenClass::SPI_MODE, /* SS pin# = */10);
   BMI160.begin();
-  uint8_t dev_id = BMI160.getDeviceID();
-  Serial.print("DEVICE ID: ");
-  Serial.println(dev_id, HEX);
 
-  // Set the accelerometer range to 250 degrees/second
-  BMI160.setGyroRange(250);
-  Serial.println("Initializing IMU device...done.");
+  // Set the accelerometer range to 2G
+  BMI160.setAccelerometerRange(2);
 }
 
 void loop() {
-  float gx, gy, gz; //scaled Gyro values
+  float ax, ay, az;   //scaled accelerometer values
 
-  // read gyro measurements from device, scaled to the configured range
-  BMI160.readGyroScaled(gx, gy, gz);
+  // read accelerometer measurements from device, scaled to the configured range
+  BMI160.readAccelerometerScaled(ax, ay, az);
 
-  // display tab-separated gyro x/y/z values
-  Serial.print("g:\t");
-  Serial.print(gx);
+  // display tab-separated accelerometer x/y/z values
+  Serial.print("a:\t");
+  Serial.print(ax);
   Serial.print("\t");
-  Serial.print(gy);
+  Serial.print(ay);
   Serial.print("\t");
-  Serial.print(gz);
+  Serial.print(az);
   Serial.println();
-
-  delay(500);
 }
 
 /*
@@ -63,3 +57,4 @@ void loop() {
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 */
+

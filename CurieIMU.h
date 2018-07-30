@@ -94,7 +94,12 @@ class CurieIMUClass : public BMI160Class {
     friend void bmi160_pin1_isr(void);
 
     public:
+        bool begin(unsigned int sensors);
         bool begin(void);
+        void end(void);
+
+        bool dataReady();
+        bool dataReady(unsigned int sensors);
 
         // supported values: 25, 50, 100, 200, 400, 800, 1600, 3200 (Hz)
         int getGyroRate();
@@ -176,10 +181,9 @@ class CurieIMUClass : public BMI160Class {
         float getDetectionDuration(int feature);
         void setDetectionDuration(int feature, float value); //value duration
 
-#if defined(BMI160GEN_USE_CURIEIMU)
         void interrupts(int feature);
         void noInterrupts(int feature);
-#endif
+
         bool interruptsEnabled(int feature);
 
         bool getInterruptStatus(int feature);
@@ -188,11 +192,15 @@ class CurieIMUClass : public BMI160Class {
         void setStepDetectionMode(int mode);
 
         void readMotionSensor(int& ax, int& ay, int& az, int& gx, int& gy, int& gz);
+        void readMotionSensorScaled(float& ax, float& ay, float& az, float& gx, float& gy, float& gz);
         void readAccelerometer(int& x, int& y, int& z);
+        void readAccelerometerScaled(float& x, float& y, float& z);
         void readGyro(int& x, int& y, int& z);
-
+        void readGyroScaled(float& x, float& y, float& z);
         int readAccelerometer(int axis);
+        float readAccelerometerScaled(int axis);
         int readGyro(int axis);
+        float readGyroScaled(int axis);
         int readTemperature();
 
         bool shockDetected(int axis, int direction);
@@ -204,10 +212,11 @@ class CurieIMUClass : public BMI160Class {
         void detachInterrupt(void);
 
     protected:
-	virtual void ss_init();
-	virtual int ss_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt);
+        virtual void ss_init();
+        virtual int ss_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt);
 
     private:
+        bool configure_imu(unsigned int sensors);
         int serial_buffer_transfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt);
 
         float getFreefallDetectionThreshold();
@@ -235,6 +244,8 @@ class CurieIMUClass : public BMI160Class {
         void setTapQuietDuration(int duration);
         int getDoubleTapDetectionDuration();
         void setDoubleTapDetectionDuration(int duration);
+
+        float convertRaw(int16_t raw, float range_abs);
 
         void enableInterrupt(int feature, bool enabled);
 

@@ -78,6 +78,11 @@ uint8_t BMI160Class::reg_read_bits(uint8_t reg, unsigned pos, unsigned len)
     return b;
 }
 
+int BMI160Class::isBitSet(uint8_t value, unsigned bit)
+{
+    return value & (1 << bit);
+}
+
 /******************************************************************************/
 
 /** Power on and prepare for general usage.
@@ -85,8 +90,10 @@ uint8_t BMI160Class::reg_read_bits(uint8_t reg, unsigned pos, unsigned len)
  * after start-up). This function also sets both the accelerometer and the gyroscope
  * to default range settings, namely +/- 2g and +/- 250 degrees/sec.
  */
-void BMI160Class::initialize()
+void BMI160Class::initialize(unsigned int flags)
 {
+    sensors_enabled = 0;
+
     /* Issue a soft-reset to bring the device into a clean state */
     reg_write(BMI160_RA_CMD, BMI160_CMD_SOFT_RESET);
     delay(1);
@@ -95,26 +102,36 @@ void BMI160Class::initialize()
     reg_read(0x7F);
     delay(1);
 
-    /* Power up the accelerometer */
-    reg_write(BMI160_RA_CMD, BMI160_CMD_ACC_MODE_NORMAL);
-    delay(1);
-    /* Wait for power-up to complete */
-    while (0x1 != reg_read_bits(BMI160_RA_PMU_STATUS,
+    if (flags & ACCEL) {
+        /* Power up the accelerometer */
+        reg_write(BMI160_RA_CMD, BMI160_CMD_ACC_MODE_NORMAL);
+        delay(1);
+
+        /* Wait for power-up to complete */
+        while (0x1 != reg_read_bits(BMI160_RA_PMU_STATUS,
                                 BMI160_ACC_PMU_STATUS_BIT,
                                 BMI160_ACC_PMU_STATUS_LEN))
+            delay(1);
+
+        sensors_enabled |= ACCEL;
+    }
+
+    if (flags & GYRO) {
+        /* Power up the gyroscope */
+        reg_write(BMI160_RA_CMD, BMI160_CMD_GYR_MODE_NORMAL);
         delay(1);
 
-    /* Power up the gyroscope */
-    reg_write(BMI160_RA_CMD, BMI160_CMD_GYR_MODE_NORMAL);
-    delay(1);
-    /* Wait for power-up to complete */
-    while (0x1 != reg_read_bits(BMI160_RA_PMU_STATUS,
+        /* Wait for power-up to complete */
+        while (0x1 != reg_read_bits(BMI160_RA_PMU_STATUS,
                                 BMI160_GYR_PMU_STATUS_BIT,
                                 BMI160_GYR_PMU_STATUS_LEN))
-        delay(1);
+            delay(1);
 
-    setFullScaleGyroRange(BMI160_GYRO_RANGE_250);
-    setFullScaleAccelRange(BMI160_ACCEL_RANGE_2G);
+        sensors_enabled |= GYRO;
+    }
+
+    setFullScaleGyroRange(BMI160_GYRO_RANGE_250, 250.0f);
+    setFullScaleAccelRange(BMI160_ACCEL_RANGE_2G, 2.0f);
 
     /* Only PIN1 interrupts currently supported - map all interrupts to PIN1 */
     reg_write(BMI160_RA_INT_MAP_0, 0xFF);
@@ -129,6 +146,17 @@ void BMI160Class::initialize()
  */
 uint8_t BMI160Class::getDeviceID() {
     return reg_read(BMI160_RA_CHIP_ID);
+}
+
+/* Checks if the specified sensors are enabled (sensors are specified using
+ * bit flags defined by CurieIMUSensor enum). If 0 is passed, checks if *any*
+ * sensors are enabled */
+bool BMI160Class::isEnabled(unsigned int sensors)
+{
+    if (sensors == 0)
+        return sensors_enabled > 0;
+
+   return (sensors_enabled & sensors) > 0;
 }
 
 /** Verify the SPI connection.
@@ -330,10 +358,11 @@ uint8_t BMI160Class::getFullScaleGyroRange() {
  * @param range New full-scale gyroscope range value
  * @see getFullScaleGyroRange()
  */
-void BMI160Class::setFullScaleGyroRange(uint8_t range) {
+void BMI160Class::setFullScaleGyroRange(uint8_t range, float real) {
     reg_write_bits(BMI160_RA_GYRO_RANGE, range,
                    BMI160_GYRO_RANGE_SEL_BIT,
                    BMI160_GYRO_RANGE_SEL_LEN);
+    gyro_range = real;
 }
 
 /** Get full-scale accelerometer range.
@@ -362,10 +391,11 @@ uint8_t BMI160Class::getFullScaleAccelRange() {
  * @see getFullScaleAccelRange()
  * @see BMI160AccelRange
  */
-void BMI160Class::setFullScaleAccelRange(uint8_t range) {
+void BMI160Class::setFullScaleAccelRange(uint8_t range, float real) {
     reg_write_bits(BMI160_RA_ACCEL_RANGE, range,
                    BMI160_ACCEL_RANGE_SEL_BIT,
                    BMI160_ACCEL_RANGE_SEL_LEN);
+    accel_range = real;
 }
 
 /** Get accelerometer offset compensation enabled value.
@@ -824,7 +854,10 @@ uint8_t BMI160Class::getStepDetectionMode() {
     uint8_t ret_step_conf0, ret_min_step_buf;
 
     ret_step_conf0 = reg_read(BMI160_RA_STEP_CONF_0);
-    ret_min_step_buf = reg_read(BMI160_RA_STEP_CONF_1);
+
+    /* min_step_buf is the first 3 bits of RA_STEP_CONF_1; the
+     * 4th bit is the enable bit (step_cnt_en) */
+    ret_min_step_buf = reg_read_bits(BMI160_RA_STEP_CONF_1, 0, 3);
 
     if ((ret_step_conf0 == BMI160_RA_STEP_CONF_0_NOR) && (ret_min_step_buf == BMI160_RA_STEP_CONF_1_NOR))
         return BMI160_STEP_MODE_NORMAL;

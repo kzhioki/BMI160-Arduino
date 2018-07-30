@@ -22,8 +22,6 @@
 #if defined(BMI160GEN_USE_CURIEIMU)
 #include "interrupt.h"
 #else
-#define interrupt_lock() (0)
-#define interrupt_unlock(flags) while (0) {}
 #define soc_gpio_mask_interrupt(a, b) while (0) {}
 #define soc_gpio_unmask_interrupt(a, b) while (0) {}
 #endif
@@ -32,6 +30,10 @@
 
 #define BMI160_GPIN_AON_PIN 4
 
+#ifndef UNUSED
+#define UNUSED(x) (void)(x)
+#endif
+
 /******************************************************************************/
 
 /** Power on and prepare for general usage.
@@ -39,17 +41,9 @@
  * on the Curie module, before calling BMI160::initialize() to activate the
  * BMI160 accelerometer and gyroscpoe with default settings.
  */
-bool CurieIMUClass::begin()
+
+bool CurieIMUClass::configure_imu(unsigned int sensors)
 {
-#if defined(BMI160GEN_USE_CURIEIMU)
-    /* Configure pin-mux settings on the Intel Curie module to 
-     * enable SPI mode usage */
-    SET_PIN_MODE(35, QRK_PMUX_SEL_MODEA); // SPI1_SS_MISO 
-    SET_PIN_MODE(36, QRK_PMUX_SEL_MODEA); // SPI1_SS_MOSI
-    SET_PIN_MODE(37, QRK_PMUX_SEL_MODEA); // SPI1_SS_SCK
-    SET_PIN_MODE(38, QRK_PMUX_SEL_MODEA); // SPI1_SS_CS_B[0]
-#endif
- 
     ss_init();
 
     /* Perform a dummy read from 0x7f to switch to spi interface */
@@ -57,20 +51,79 @@ bool CurieIMUClass::begin()
     serial_buffer_transfer(&dummy_reg, 1, 1);
 
     /* The SPI interface is ready - now invoke the base class initialization */
-    BMI160Class::initialize();
+    initialize(sensors);
 
     /** Verify the SPI connection.
      * MakgetGyroRatee sure the device is connected and responds as expected.
      * @return True if connection is valid, false otherwise
      */
-    return (CURIE_IMU_CHIP_ID == getDeviceID());
+    if (CURIE_IMU_CHIP_ID != getDeviceID())
+        return false;
+
+    return true;
+}
+
+bool CurieIMUClass::begin()
+{
+    return configure_imu(GYRO | ACCEL);
+}
+
+bool CurieIMUClass::begin(unsigned int sensors)
+{
+    return configure_imu(sensors);
+}
+
+void CurieIMUClass::end()
+{
+}
+
+bool CurieIMUClass::dataReady()
+{
+    uint8_t stat;
+
+    /* If no sensors are enabled */
+    if (!isEnabled(0))
+        return false;
+
+    /* Read status register */
+    stat = getRegister(BMI160_RA_STATUS);
+
+    if (isEnabled(GYRO) && !isBitSet(stat, BMI160_STATUS_DRDY_GYR))
+        return false;
+
+    if (isEnabled(ACCEL) && !isBitSet(stat, BMI160_STATUS_DRDY_ACC))
+        return false;
+
+    return true;
+}
+
+bool CurieIMUClass::dataReady(unsigned int sensors)
+{
+    uint8_t stat;
+
+    /* If no sensors enabled, or no data requested */
+    if (sensors == 0 || !isEnabled(0))
+        return false;
+
+    /* Read status register */
+    stat = getRegister(BMI160_RA_STATUS);
+
+    if ((sensors & GYRO) && isEnabled(GYRO) &&
+        !isBitSet(stat, BMI160_STATUS_DRDY_GYR))
+        return false;
+
+    if ((sensors & ACCEL) && isEnabled(ACCEL) &&
+        !isBitSet(stat, BMI160_STATUS_DRDY_ACC))
+        return false;
+
+    return true;
 }
 
 int CurieIMUClass::getGyroRate()
 {
     int rate;
 
-    switch(BMI160Class::getGyroRate()) {
+    switch (BMI160Class::getGyroRate()) {
         case BMI160_GYRO_RATE_25HZ:
             rate = 25;
             break;
@@ -137,7 +190,7 @@ float CurieIMUClass::getAccelerometerRate()
 {
     float rate;
 
-    switch(BMI160Class::getAccelRate()) {
+    switch (BMI160Class::getAccelRate()) {
         case BMI160_ACCEL_RATE_25_2HZ:
             rate = 12.5;
             break;
@@ -233,20 +286,26 @@ int CurieIMUClass::getGyroRange()
 void CurieIMUClass::setGyroRange(int range)
 {
     BMI160GyroRange bmiRange;
+    float real;
 
     if (range >= 2000) {
         bmiRange = BMI160_GYRO_RANGE_2000;
+        real = 2000.0f;
     } else if (range >= 1000) {
         bmiRange = BMI160_GYRO_RANGE_1000;
+        real = 1000.0f;
     } else if (range >= 500) {
         bmiRange = BMI160_GYRO_RANGE_500;
+        real = 500.0f;
     } else if (range >= 250) {
         bmiRange = BMI160_GYRO_RANGE_250;
+        real = 250.0f;
     } else {
         bmiRange = BMI160_GYRO_RANGE_125;
+        real = 125.0f;
     }
 
-    setFullScaleGyroRange(bmiRange);
+    setFullScaleGyroRange(bmiRange, real);
 }
 
 int CurieIMUClass::getAccelerometerRange()
@@ -278,18 +337,23 @@ int CurieIMUClass::getAccelerometerRange()
 void CurieIMUClass::setAccelerometerRange(int range)
 {
     BMI160AccelRange bmiRange;
+    float real;
 
     if (range <= 2) {
         bmiRange = BMI160_ACCEL_RANGE_2G;
+        real = 2.0f;
     } else if (range <= 4) {
         bmiRange = BMI160_ACCEL_RANGE_4G;
+        real = 4.0f;
     } else if (range <= 8) {
         bmiRange = BMI160_ACCEL_RANGE_8G;
+        real = 8.0f;
     } else {
         bmiRange = BMI160_ACCEL_RANGE_16G;
+        real = 16.0f;
     }
 
-    setFullScaleAccelRange(bmiRange);
+    setFullScaleAccelRange(bmiRange, real);
 }
 
 void CurieIMUClass::autoCalibrateGyroOffset()
@@ -436,8 +500,6 @@ float CurieIMUClass::getDetectionThreshold(int feature)
             return getTapDetectionThreshold();
 
         case CURIE_IMU_STEP:
-        case CURIE_IMU_TAP_SHOCK:
-        case CURIE_IMU_TAP_QUIET:
         case CURIE_IMU_DOUBLE_TAP:
         case CURIE_IMU_FIFO_FULL:
         case CURIE_IMU_DATA_READY:
@@ -470,8 +532,6 @@ void CurieIMUClass::setDetectionThreshold(int feature, float threshold)
             break;
 
         case CURIE_IMU_STEP:
-        case CURIE_IMU_TAP_SHOCK:
-        case CURIE_IMU_TAP_QUIET:
         case CURIE_IMU_DOUBLE_TAP:
         case CURIE_IMU_FIFO_FULL:
         case CURIE_IMU_DATA_READY:
@@ -766,7 +826,7 @@ void CurieIMUClass::setTapDetectionThreshold(float threshold)
 
         case 16:
         default:
-            bmiThreshold = (threshold - 2500) / 500.0;
+            bmiThreshold = (threshold - 250) / 500.0;
             break;
     }
 
@@ -799,7 +859,7 @@ void CurieIMUClass::setDetectionDuration(int feature, float value)
             break;
 
         case CURIE_IMU_ZERO_MOTION:
-            setZeroMotionDetectionThreshold(value);
+            setZeroMotionDetectionDuration(value);
             break;
 
         case CURIE_IMU_TAP_QUIET:
@@ -874,8 +934,6 @@ float CurieIMUClass::getMotionDetectionDuration()
     int bmiDuration = BMI160Class::getMotionDetectionDuration();
 
     return (bmiDuration / getAccelerometerRate());
-
-
 }
 void CurieIMUClass::setMotionDetectionDuration(float duration)
 {
@@ -1420,7 +1478,6 @@ void CurieIMUClass::setDoubleTapDetectionDuration(int duration)
     BMI160Class::setDoubleTapDetectionDuration(bmiDuration);
 }
 
-#if defined(BMI160GEN_USE_CURIEIMU)
 void CurieIMUClass::interrupts(int feature)
 {
     enableInterrupt(feature, true);
@@ -1430,7 +1487,6 @@ void CurieIMUClass::noInterrupts(int feature)
 {
     enableInterrupt(feature, false);
 }
-#endif // defined(BMI160GEN_USE_CURIEIMU)
 
 void CurieIMUClass::enableInterrupt(int feature, bool enabled)
 {
@@ -1455,7 +1511,7 @@ void CurieIMUClass::enableInterrupt(int feature, bool enabled)
             setIntZeroMotionEnabled(enabled);
             break;
 
-       case CURIE_IMU_TAP:
+        case CURIE_IMU_TAP:
             setIntTapEnabled(enabled);
             break;
 
@@ -1471,8 +1527,6 @@ void CurieIMUClass::enableInterrupt(int feature, bool enabled)
             setIntDataReadyEnabled(enabled);
             break;
 
-        case CURIE_IMU_TAP_QUIET:
-        case CURIE_IMU_TAP_SHOCK:
         default:
             break;
     }
@@ -1496,7 +1550,7 @@ bool CurieIMUClass::interruptsEnabled(int feature)
         case CURIE_IMU_ZERO_MOTION:
             return getIntZeroMotionEnabled();
 
-       case CURIE_IMU_TAP:
+        case CURIE_IMU_TAP:
             return getIntTapEnabled();
 
         case CURIE_IMU_DOUBLE_TAP:
@@ -1508,8 +1562,6 @@ bool CurieIMUClass::interruptsEnabled(int feature)
         case CURIE_IMU_DATA_READY:
             return getIntDataReadyEnabled();
 
-        case CURIE_IMU_TAP_QUIET:
-        case CURIE_IMU_TAP_SHOCK:
         default:
             return false;
     }
@@ -1545,8 +1597,6 @@ bool CurieIMUClass::getInterruptStatus(int feature)
         case CURIE_IMU_DATA_READY:
             return getIntDataReadyStatus();
 
-        case CURIE_IMU_TAP_QUIET:
-        case CURIE_IMU_TAP_SHOCK:
         default:
             return false;
     }
@@ -1562,9 +1612,22 @@ void CurieIMUClass::setStepDetectionMode(int mode)
     BMI160Class::setStepDetectionMode((BMI160StepMode)mode);
 }
 
-void CurieIMUClass::readMotionSensor(int& ax, int& ay, int& az, int& gx, int& gy, int& gz)
+float CurieIMUClass::convertRaw(int16_t raw, float range_abs)
 {
-    int16_t sax, say, saz, sgx, sgy, sgz;
+    float slope;
+    float val;
+
+    /* Input range will be -32768 to 32767
+     * Output range must be -range_abs to range_abs */
+    val = (float)raw;
+    slope = (range_abs * 2.0f) / BMI160_SENSOR_RANGE;
+    return -(range_abs) + slope * (val + BMI160_SENSOR_LOW);
+}
+
+void CurieIMUClass::readMotionSensor(int &ax, int &ay, int &az, int &gx,
+                                     int &gy, int &gz)
+{
+    short sax, say, saz, sgx, sgy, sgz;
 
     getMotion6(&sax, &say, &saz, &sgx, &sgy, &sgz);
 
@@ -1576,9 +1639,24 @@ void CurieIMUClass::readMotionSensor(int& ax, int& ay, int& az, int& gx, int& gy
     gz = sgz;
 }
 
-void CurieIMUClass::readAccelerometer(int& x, int& y, int& z)
+void CurieIMUClass::readMotionSensorScaled(float &ax, float &ay, float &az,
+                                           float &gx, float &gy, float &gz)
 {
-    int16_t sx, sy, sz;
+    int16_t sax, say, saz, sgx, sgy, sgz;
+
+    getMotion6(&sax, &say, &saz, &sgx, &sgy, &sgz);
+
+    ax = convertRaw(sax, accel_range);
+    ay = convertRaw(say, accel_range);
+    az = convertRaw(saz, accel_range);
+    gx = convertRaw(sgx, gyro_range);
+    gy = convertRaw(sgy, gyro_range);
+    gz = convertRaw(sgz, gyro_range);
+}
+
+void CurieIMUClass::readAccelerometer(int &x, int &y, int &z)
+{
+    short sx, sy, sz;
 
     getAcceleration(&sx, &sy, &sz);
 
@@ -1587,15 +1665,37 @@ void CurieIMUClass::readAccelerometer(int& x, int& y, int& z)
     z = sz;
 }
 
-void CurieIMUClass::readGyro(int& x, int& y, int& z)
+void CurieIMUClass::readAccelerometerScaled(float &x, float &y, float &z)
 {
     int16_t sx, sy, sz;
+
+    getAcceleration(&sx, &sy, &sz);
+
+    x = convertRaw(sx, accel_range);
+    y = convertRaw(sy, accel_range);
+    z = convertRaw(sz, accel_range);
+}
+
+void CurieIMUClass::readGyro(int &x, int &y, int &z)
+{
+    short sx, sy, sz;
 
     getRotation(&sx, &sy, &sz);
 
     x = sx;
     y = sy;
     z = sz;
+}
+
+void CurieIMUClass::readGyroScaled(float &x, float &y, float &z)
+{
+    int16_t sx, sy, sz;
+
+    getRotation(&sx, &sy, &sz);
+
+    x = convertRaw(sx, gyro_range);
+    y = convertRaw(sy, gyro_range);
+    z = convertRaw(sz, gyro_range);
 }
 
 int CurieIMUClass::readAccelerometer(int axis)
@@ -1608,7 +1708,24 @@ int CurieIMUClass::readAccelerometer(int axis)
         return getAccelerationZ();
     }
 
-    return 0; 
+    return 0;
+}
+
+float CurieIMUClass::readAccelerometerScaled(int axis)
+{
+    int16_t raw;
+
+    if (axis == X_AXIS) {
+        raw = getAccelerationX();
+    } else if (axis == Y_AXIS) {
+        raw = getAccelerationY();
+    } else if (axis == Z_AXIS) {
+        raw = getAccelerationZ();
+    } else {
+        return 0;
+    }
+
+    return convertRaw(raw, accel_range);
 }
 
 int CurieIMUClass::readGyro(int axis)
@@ -1622,6 +1739,23 @@ int CurieIMUClass::readGyro(int axis)
     }
 
     return 0;
+}
+
+float CurieIMUClass::readGyroScaled(int axis)
+{
+    int16_t raw;
+
+    if (axis == X_AXIS) {
+        raw = getRotationX();
+    } else if (axis == Y_AXIS) {
+        raw = getRotationY();
+    } else if (axis == Z_AXIS) {
+        raw = getRotationZ();
+    } else {
+        return 0;
+    }
+
+    return convertRaw(raw, gyro_range);
 }
 
 int CurieIMUClass::readTemperature()
@@ -1708,6 +1842,9 @@ void CurieIMUClass::ss_init() {
 
 int CurieIMUClass::ss_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
 {
+    UNUSED(buf);
+    UNUSED(tx_cnt);
+    UNUSED(rx_cnt);
     return false;
 }
 
@@ -1715,19 +1852,10 @@ int CurieIMUClass::ss_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
  *  to use for accessing device registers.  This implementation uses the SPI
  *  bus on the Intel Curie module to communicate with the BMI160.
  */
-int CurieIMUClass::serial_buffer_transfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
+int CurieIMUClass::serial_buffer_transfer(uint8_t *buf, unsigned tx_cnt,
+                                          unsigned rx_cnt)
 {
-    int flags, status;
-
-    /* Lock interrupts here to
-     * - avoid concurrent access to the SPI bus
-     * - avoid delays in SPI transfer due to unrelated interrupts
-     */
-    flags = interrupt_lock();
-    status = ss_xfer(buf, tx_cnt, rx_cnt);
-    interrupt_unlock(flags);
-
-    return status;
+    return ss_xfer(buf, tx_cnt, rx_cnt);
 }
 
 /** Interrupt handler for interrupts from PIN1 on the BMI160
@@ -1760,10 +1888,12 @@ void CurieIMUClass::attachInterrupt(void (*callback)(void))
     cfg.int_debounce = DEBOUNCE_ON;
     cfg.gpio_cb = bmi160_pin1_isr;
     soc_gpio_set_config(SOC_GPIO_AON, BMI160_GPIN_AON_PIN, &cfg);
+#else
+    UNUSED(callback);
 #endif
 
-    setInterruptMode(1);  // Active-Low
-    setInterruptDrive(0); // Push-Pull
+    setInterruptMode(1);                        // Active-Low
+    setInterruptDrive(0);                       // Push-Pull
     setInterruptLatch(BMI160_LATCH_MODE_10_MS); // 10ms pulse
     setIntEnabled(true);
 }

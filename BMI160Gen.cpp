@@ -36,11 +36,57 @@ bool BMI160GenClass::begin(Mode mode, const int arg1, const int arg2)
     return CurieIMUClass::begin();
 }
 
+// synchronization semaphore to wake-up thread from interrupt handler
+static sem_t g_sem;
+
+static void *thread_handler(void *arg)
+{
+    void (*callback)(void) = (void (*)(void))arg;
+
+    while (1) {
+        sem_wait(&g_sem);
+        callback();
+    }
+}
+
+static void int_handler(void)
+{
+    sem_post(&g_sem);
+}
+
 void BMI160GenClass::attachInterrupt(void (*callback)(void))
 {
+    pthread_attr_t attr;
+    struct sched_param sparam;
+    int status;
+
+    // synchronization semaphore to wake-up thread from interrupt handler
+    sem_init(&g_sem, 0, 0);
+    sem_setprotocol(&g_sem, SEM_PRIO_NONE);
+
+    // create a waked-up thread from interrupt handler if it doesn't exit
+    if (!_tid) {
+        status = pthread_attr_init(&attr);
+        if (status) {
+            Serial.println("attachInterrupt: pthread_attr_init error!");
+        }
+
+        sparam.sched_priority = sched_get_priority_max(SCHED_FIFO);
+        status = pthread_attr_setschedparam(&attr,&sparam);
+        if (status) {
+            Serial.println("attachInterrupt: pthread_attr_setschedparam error!");
+        }
+
+        status = pthread_create(&_tid, &attr, thread_handler, (void *)callback);
+        if (status) {
+            Serial.println("attachInterrupt: pthread_create error!");
+        }
+    }
+
     CurieIMUClass::attachInterrupt(NULL);
     if (0 <= interrupt_pin) {
-        ::attachInterrupt(interrupt_pin, callback, FALLING); 
+        //::attachInterrupt(interrupt_pin, callback, FALLING); 
+        ::attachInterrupt(interrupt_pin, int_handler, FALLING); 
     } else {
         Serial.println("BMI160GenClass::attachInterrupt: No valid interruption pin.");
     }
